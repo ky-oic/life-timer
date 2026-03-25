@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=390, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>LIFEFLOW</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ── NOTIFICATION TOAST ── -->
+  <div class="toast" id="toast">
+    <div class="toast-icon">⏰</div>
+    <div>
+      <div class="toast-title" id="toast-title"></div>
+      <div class="toast-body" id="toast-body"></div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════
+       PHONE FRAME WRAPPER
+  ══════════════════════════ -->
+  <div class="phone-frame">
+
+    <!-- STATUS BAR -->
+    <div class="status-bar">
+      <span class="status-time" id="status-time">9:41</span>
+      <div class="status-icons">
+        <span>●●●</span>
+        <span>WiFi</span>
+        <span>🔋</span>
+      </div>
+    </div>
+
+    <!-- HEADER -->
+    <header class="app-header">
+      <button class="hamburger" id="hamburger" aria-label="メニュー">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="header-center">
+        <div class="logo">LIFEFLOW</div>
+        <div class="header-clock" id="header-clock">--:--</div>
+      </div>
+      <div class="header-date" id="header-date"></div>
+    </header>
+
+    <!-- DRAWER OVERLAY -->
+    <div class="drawer-overlay" id="drawer-overlay"></div>
+
+    <!-- SIDE DRAWER -->
+    <nav class="drawer" id="drawer" role="navigation">
+      <div class="drawer-brand">
+        <div class="drawer-logo">LIFEFLOW</div>
+        <div class="drawer-tagline">生活タイマー</div>
+      </div>
+      <ul class="drawer-nav">
+        <li class="drawer-item active" data-page="schedule">
+          <span class="drawer-item-icon">⏱</span>
+          <span class="drawer-item-label">スケジュール</span>
+          <span class="drawer-item-arrow">›</span>
+        </li>
+        <li class="drawer-item" data-page="inventory">
+          <span class="drawer-item-icon">📦</span>
+          <span class="drawer-item-label">在庫管理</span>
+          <span class="drawer-item-arrow">›</span>
+        </li>
+        <li class="drawer-item" data-page="memo">
+          <span class="drawer-item-icon">📝</span>
+          <span class="drawer-item-label">メモ帳</span>
+          <span class="drawer-item-arrow">›</span>
+        </li>
+      </ul>
+      <div class="drawer-footer">
+        <span class="drawer-version">v1.0.0</span>
+      </div>
+    </nav>
+
+    <!-- ── SCROLL CONTAINER ── -->
+    <div class="scroll-area">
+
+      <!-- ════════════════════════
+           PAGE: SCHEDULE
+      ════════════════════════ -->
+      <section class="page active" id="page-schedule">
+
+        <!-- Current event timer card -->
+        <div class="timer-card" id="timer-card">
+          <div class="timer-card-label">現在のイベント</div>
+          <div class="timer-event-name" id="timer-event-name">スケジュールを追加</div>
+          <div class="timer-countdown" id="timer-countdown">--:--</div>
+          <div class="timer-next-label" id="timer-next-label"></div>
+          <div class="timer-progress-bar">
+            <div class="timer-progress-fill" id="timer-progress-fill"></div>
+          </div>
+        </div>
+
+        <!-- Add form -->
+        <div class="form-card">
+          <div class="form-card-title">＋ イベントを追加</div>
+          <div class="form-row">
+            <div class="form-group half">
+              <label>時刻</label>
+              <input type="time" id="sch-time">
+            </div>
+            <div class="form-group half">
+              <label>カテゴリ</label>
+              <select id="sch-cat">
+                <option value="general">一般</option>
+                <option value="work">仕事</option>
+                <option value="meal">食事</option>
+                <option value="exercise">運動</option>
+                <option value="rest">休憩</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>イベント名</label>
+            <input type="text" id="sch-name" placeholder="例: 朝食、会議、散歩...">
+          </div>
+          <button class="btn btn-primary full-width" id="sch-add-btn">追加する</button>
+        </div>
+
+        <!-- Schedule list -->
+        <div class="list-header">
+          <span>本日のスケジュール</span>
+          <span class="list-count" id="sch-count">0件</span>
+        </div>
+        <div class="schedule-list" id="schedule-list">
+          <div class="empty-state">
+            <div class="empty-icon">📅</div>
+            <div class="empty-text">スケジュールがありません</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════════════════════
+           PAGE: INVENTORY
+      ════════════════════════ -->
+      <section class="page" id="page-inventory">
+
+        <!-- Low stock alert -->
+        <div class="alert-banner" id="low-stock-banner">
+          <span class="alert-icon">⚠️</span>
+          <span id="low-stock-text">在庫が少ないアイテムがあります</span>
+        </div>
+
+        <!-- Category tabs -->
+        <div class="tab-bar">
+          <button class="tab active" data-tab="all">すべて</button>
+          <button class="tab" data-tab="food">🥬 食材</button>
+          <button class="tab" data-tab="daily">🧴 日用品</button>
+        </div>
+
+        <!-- Add item form -->
+        <div class="form-card">
+          <div class="form-card-title">＋ アイテムを追加</div>
+          <div class="form-row">
+            <div class="form-group two-thirds">
+              <label>アイテム名</label>
+              <input type="text" id="inv-name" placeholder="例: 牛乳、シャンプー...">
+            </div>
+            <div class="form-group one-third">
+              <label>数量</label>
+              <input type="number" id="inv-qty" value="1" min="0">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group half">
+              <label>カテゴリ</label>
+              <select id="inv-cat">
+                <option value="food">食材</option>
+                <option value="daily">日用品</option>
+              </select>
+            </div>
+            <div class="form-group half form-group-btn">
+              <button class="btn btn-primary full-width" id="inv-add-btn">追加する</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="list-header">
+          <span id="inv-filter-label">すべてのアイテム</span>
+          <span class="list-count" id="inv-count">0件</span>
+        </div>
+
+        <div class="inventory-grid" id="inventory-grid">
+          <div class="empty-state full-col">
+            <div class="empty-icon">📦</div>
+            <div class="empty-text">アイテムがありません</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════════════════════
+           PAGE: MEMO
+      ════════════════════════ -->
+      <section class="page" id="page-memo">
+        <!-- Memo toolbar -->
+        <div class="memo-toolbar">
+          <button class="btn btn-primary btn-sm" id="memo-new-btn">＋ 新規</button>
+          <button class="btn btn-ghost btn-sm" id="memo-delete-btn">削除</button>
+        </div>
+
+        <!-- Memo list (collapsed/expanded) -->
+        <div class="memo-list-panel" id="memo-list-panel">
+          <div class="memo-list" id="memo-list">
+            <div class="empty-state">
+              <div class="empty-icon">📝</div>
+              <div class="empty-text">メモがありません</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Memo editor -->
+        <div class="memo-editor-panel">
+          <input
+            type="text"
+            class="memo-title-input"
+            id="memo-title"
+            placeholder="タイトルを入力..."
+          >
+          <textarea
+            class="memo-body-input"
+            id="memo-body"
+            placeholder="ここにメモを入力してください..."
+          ></textarea>
+          <div class="memo-meta">
+            <span id="memo-updated"></span>
+            <span id="memo-chars">0文字</span>
+          </div>
+        </div>
+      </section>
+
+    </div><!-- /scroll-area -->
+
+    <!-- BOTTOM NAV BAR -->
+    <nav class="bottom-nav">
+      <button class="nav-btn active" data-page="schedule">
+        <span class="nav-icon">⏱</span>
+        <span class="nav-label">タイマー</span>
+      </button>
+      <button class="nav-btn" data-page="inventory">
+        <span class="nav-icon">📦</span>
+        <span class="nav-label">在庫</span>
+      </button>
+      <button class="nav-btn" data-page="memo">
+        <span class="nav-icon">📝</span>
+        <span class="nav-label">メモ</span>
+      </button>
+    </nav>
+
+    <!-- HOME INDICATOR -->
+    <div class="home-indicator"></div>
+
+  </div><!-- /phone-frame -->
+
+  <script src="app.js"></script>
+</body>
+</html>
