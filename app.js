@@ -98,7 +98,31 @@ function closeDrawer() {
 }
 
 /* ══════════════════════════════════════════
-   TOAST NOTIFICATION
+   SERVICE WORKER 登録 & 通知
+   ══════════════════════════════════════════ */
+let swReg = null;
+
+async function initServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    swReg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+    navigator.serviceWorker.addEventListener('message', event => {
+      const { type, page } = event.data || {};
+      if (type === 'OPEN_PAGE' && page) switchPage(page);
+      if (type === 'REQUEST_SCHEDULES') syncSchedulesToSW();
+    });
+  } catch (err) {
+    console.warn('SW registration failed:', err);
+  }
+}
+
+function syncSchedulesToSW() {
+  if (!swReg || !swReg.active) return;
+  swReg.active.postMessage({ type: 'SYNC_SCHEDULES', payload: { schedules } });
+}
+
+/* ══════════════════════════════════════════
+   TOAST NOTIFICATION（アプリ前面時）
    ══════════════════════════════════════════ */
 let toastTimer = null;
 
@@ -108,14 +132,6 @@ function showToast(title, body) {
   $('toast').classList.add('show');
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => $('toast').classList.remove('show'), 4500);
-
-  if ('Notification' in window && Notification.permission === 'granted') {
-    new Notification(title, { body });
-  }
-}
-
-if ('Notification' in window && Notification.permission === 'default') {
-  Notification.requestPermission();
 }
 
 /* ══════════════════════════════════════════
@@ -138,6 +154,7 @@ function addSchedule() {
   schedules.push({ id: Date.now(), time, name, cat });
   schedules.sort((a, b) => a.time.localeCompare(b.time));
   save('lf_schedules', schedules);
+  syncSchedulesToSW();
   $('sch-name').value = '';
   renderScheduleList();
 }
@@ -145,6 +162,7 @@ function addSchedule() {
 function removeSchedule(id) {
   schedules = schedules.filter(s => s.id !== id);
   save('lf_schedules', schedules);
+  syncSchedulesToSW();
   renderScheduleList();
 }
 
@@ -201,16 +219,13 @@ function updateTimerDisplay(now) {
 
   if (cur) {
     nameEl.textContent = cur.name;
-
     if (next) {
       const [nh, nm] = next.time.split(':').map(Number);
       const targetSec = nh * 3600 + nm * 60;
       const diff = targetSec - nowSec;
-
       if (diff >= 0) {
         countEl.textContent = formatCountdown(diff);
         nextEl.textContent  = '次: ' + next.time + ' ' + next.name;
-
         const [ch, cm] = cur.time.split(':').map(Number);
         const startSec = ch * 3600 + cm * 60;
         const total    = targetSec - startSec;
@@ -222,7 +237,6 @@ function updateTimerDisplay(now) {
       nextEl.textContent  = '本日のスケジュール終了';
       fillEl.style.width  = '100%';
     }
-
   } else if (next) {
     nameEl.textContent = '待機中...';
     const [nh, nm] = next.time.split(':').map(Number);
@@ -230,7 +244,6 @@ function updateTimerDisplay(now) {
     countEl.textContent = diff >= 0 ? formatCountdown(diff) : '--:--';
     nextEl.textContent  = '次: ' + next.time + ' ' + next.name;
     fillEl.style.width  = '0%';
-
   } else {
     nameEl.textContent  = 'スケジュールを追加';
     countEl.textContent = '--:--';
@@ -260,7 +273,6 @@ function checkNotifications(now) {
   if (now.getSeconds() !== 0) return;
   const key    = now.toISOString().slice(0, 10);
   const nowStr = pad(now.getHours()) + ':' + pad(now.getMinutes());
-
   schedules.forEach(s => {
     const nid = key + '_' + s.id;
     if (s.time === nowStr && !notified.has(nid)) {
@@ -290,13 +302,11 @@ function addInventory() {
   const name = $('inv-name').value.trim();
   const qty  = parseInt($('inv-qty').value) || 0;
   const cat  = $('inv-cat').value;
-
   if (!name) {
     $('inv-name').style.borderColor = 'var(--danger)';
     setTimeout(() => $('inv-name').style.borderColor = '', 800);
     return;
   }
-
   inventory.push({ id: Date.now(), name, qty, cat, threshold: 2 });
   save('lf_inventory', inventory);
   $('inv-name').value = '';
@@ -322,10 +332,7 @@ function renderInventory() {
   const grid = $('inventory-grid');
   const catLabel    = { food: '食材', daily: '日用品' };
   const filterLabel = { all: 'すべてのアイテム', food: '食材', daily: '日用品' };
-
-  const filtered = invFilter === 'all'
-    ? inventory
-    : inventory.filter(i => i.cat === invFilter);
+  const filtered = invFilter === 'all' ? inventory : inventory.filter(i => i.cat === invFilter);
 
   $('inv-count').textContent        = filtered.length + '件';
   $('inv-filter-label').textContent = filterLabel[invFilter];
@@ -348,7 +355,6 @@ function renderInventory() {
   filtered.forEach(item => {
     const isLow = item.qty <= item.threshold;
     const card  = create('div', 'inv-card' + (isLow ? ' low' : ''));
-
     card.innerHTML =
       (isLow ? '<span class="inv-low-badge">残り少</span>' : '') +
       '<div class="inv-card-name">' + escHtml(item.name) + '</div>' +
@@ -359,7 +365,6 @@ function renderInventory() {
         '<button class="qty-btn" data-action="plus">&#xFF0B;</button>' +
         '<button class="inv-delete-btn" aria-label="削除">&#x1F5D1;</button>' +
       '</div>';
-
     card.querySelector('[data-action="minus"]').addEventListener('click', () => changeQty(item.id, -1));
     card.querySelector('[data-action="plus"]').addEventListener('click',  () => changeQty(item.id, +1));
     card.querySelector('.inv-delete-btn').addEventListener('click', () => removeInventory(item.id));
@@ -391,7 +396,6 @@ function deleteMemo() {
   save('lf_memos', memos);
   activeMemoId = memos.length ? memos[0].id : null;
   renderMemoList();
-
   if (activeMemoId) {
     loadMemoEditor(memos.find(m => m.id === activeMemoId));
   } else {
@@ -432,12 +436,10 @@ function selectMemo(id) {
 
 function renderMemoList() {
   const list = $('memo-list');
-
   if (!memos.length) {
     list.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x1F4DD;</div><div class="empty-text">メモがありません</div></div>';
     return;
   }
-
   list.innerHTML = '';
   memos.forEach(m => {
     const item = create('div', 'memo-list-item' + (m.id === activeMemoId ? ' active' : ''));
@@ -453,9 +455,7 @@ function renderMemoList() {
 /* ══════════════════════════════════════════
    UTILITIES
    ══════════════════════════════════════════ */
-function pad(n) {
-  return String(n).padStart(2, '0');
-}
+function pad(n) { return String(n).padStart(2, '0'); }
 
 function escHtml(str) {
   return str
@@ -475,12 +475,24 @@ function fmtDate(iso) {
 /* ══════════════════════════════════════════
    INIT
    ══════════════════════════════════════════ */
-(function init() {
+(async function init() {
   renderScheduleList();
   renderInventory();
   renderMemoList();
   if (activeMemoId) {
     const m = memos.find(m => m.id === activeMemoId);
     if (m) loadMemoEditor(m);
+  }
+
+  // Service Worker 登録
+  await initServiceWorker();
+
+  // 通知許可ダイアログを表示
+  if ('Notification' in window && Notification.permission === 'default') {
+    await Notification.requestPermission();
+  }
+  // 許可済みならSWにスケジュールを同期
+  if ('Notification' in window && Notification.permission === 'granted') {
+    syncSchedulesToSW();
   }
 })();
