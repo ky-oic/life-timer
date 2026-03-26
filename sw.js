@@ -2,31 +2,27 @@
  * LIFEFLOW — sw.js
  * Service Worker: バックグラウンド通知 & オフラインキャッシュ
  *
- * ─ 仕組み ─
- * 1. app.js がスケジュールを保存するたびに sw.js へ postMessage で伝達
- * 2. sw.js 側で setTimeout / setInterval を使い、指定時刻に
- *    self.registration.showNotification() でOS通知を発火
- * 3. ページが閉じていても Service Worker は生きているので通知が届く
- *    ※ iOS Safari は PWA としてホーム画面に追加した場合のみ対応
+ * iOS 16.4+ でホーム画面追加済みの PWA のみプッシュ通知が動作します。
+ * ここでは「毎分 alarm チェック」を setInterval で行うシンプル実装です。
  */
 
 'use strict';
 
 const CACHE_NAME = 'lifeflow-v1';
-const CACHE_FILES = [
+const CACHE_URLS = [
   './',
   './index.html',
   './style.css',
   './app.js',
-  './sw.js'
+  './manifest.json',
 ];
 
 /* ══════════════════════════════════════════
-   INSTALL — 静的ファイルをキャッシュ
+   INSTALL — 静的アセットをキャッシュ
    ══════════════════════════════════════════ */
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(CACHE_FILES))
+    caches.open(CACHE_NAME).then(cache => cache.addAll(CACHE_URLS))
   );
   self.skipWaiting();
 });
@@ -37,16 +33,14 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(
-        keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
-      )
+      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
     )
   );
   self.clients.claim();
 });
 
 /* ══════════════════════════════════════════
-   FETCH — キャッシュ優先 / なければネット
+   FETCH — キャッシュファースト
    ══════════════════════════════════════════ */
 self.addEventListener('fetch', event => {
   event.respondWith(
@@ -55,122 +49,113 @@ self.addEventListener('fetch', event => {
 });
 
 /* ══════════════════════════════════════════
-   NOTIFICATION TIMER MANAGEMENT
-   スケジュールデータを受け取り、各時刻に通知をセット
+   STATE（SW 内）
    ══════════════════════════════════════════ */
-
-// タイマーIDを管理（再登録時にクリア）
-const pendingTimers = new Map(); // scheduleId → timerId
-
-/**
- * 指定されたスケジュール配列に基づきタイマーを再設定
- * @param {Array} schedules  [{id, time:"HH:MM", name, cat}, ...]
- */
-function scheduleNotifications(schedules) {
-  // 既存タイマーをすべてクリア
-  pendingTimers.forEach(id => clearTimeout(id));
-  pendingTimers.clear();
-
-  const now = new Date();
-  const today = now.toISOString().slice(0, 10); // "YYYY-MM-DD"
-
-  schedules.forEach(s => {
-    const [h, m] = s.time.split(':').map(Number);
-
-    // 今日のその時刻の Date オブジェクト
-    const fireAt = new Date(now);
-    fireAt.setHours(h, m, 0, 0);
-
-    const msUntil = fireAt.getTime() - now.getTime();
-
-    // 過去の時刻はスキップ（1秒未満もスキップ）
-    if (msUntil < 1000) return;
-
-    const catEmoji = {
-      general: '⏰', work: '💼', meal: '🍽️', exercise: '🏃', rest: '😴'
-    }[s.cat] || '⏰';
-
-    const catLabel = {
-      general: '一般', work: '仕事', meal: '食事', exercise: '運動', rest: '休憩'
-    }[s.cat] || '';
-
-    const timerId = setTimeout(() => {
-      self.registration.showNotification(`${catEmoji} ${s.time} — ${s.name}`, {
-        body: `${catLabel}の時間です！`,
-        icon: './icon-192.png',   // アイコンがあれば表示（なくてもエラーにならない）
-        badge: './icon-96.png',
-        tag: `lifeflow-${s.id}`,  // 同じtagは上書き（重複防止）
-        requireInteraction: false,
-        silent: false,
-        data: { scheduleId: s.id, page: 'schedule' }
-      });
-      pendingTimers.delete(s.id);
-    }, msUntil);
-
-    pendingTimers.set(s.id, timerId);
-  });
-}
+let schedules = [];        // app.js から同期されるスケジュール配列
+let notified  = new Set(); // 当日通知済み ID セット
+let alarmInterval = null;
 
 /* ══════════════════════════════════════════
-   MESSAGE — app.js からの通信を受け取る
+   MESSAGE — app.js からのメッセージ受信
    ══════════════════════════════════════════ */
 self.addEventListener('message', event => {
   const { type, payload } = event.data || {};
 
   if (type === 'SYNC_SCHEDULES') {
-    // スケジュールが更新されたので通知タイマーを再設定
-    scheduleNotifications(payload.schedules || []);
-  }
-
-  if (type === 'CANCEL_ALL') {
-    pendingTimers.forEach(id => clearTimeout(id));
-    pendingTimers.clear();
+    schedules = payload.schedules || [];
+    // notified をリセット（日付をまたいだ場合も含め再構築）
+    const today = new Date().toISOString().slice(0, 10);
+    notified = new Set(
+      schedules.map(s => today + '_' + s.id).filter(() => false) // 空で開始
+    );
+    startAlarmLoop();
+    // 受信確認を返す
+    event.source && event.source.postMessage({ type: 'SCHEDULES_SYNCED' });
   }
 });
 
 /* ══════════════════════════════════════════
-   NOTIFICATION CLICK — 通知タップでアプリを開く
+   ALARM LOOP — 毎分 :00 秒に通知チェック
+   ══════════════════════════════════════════ */
+function startAlarmLoop() {
+  if (alarmInterval) clearInterval(alarmInterval);
+
+  // 即時チェック + 毎分チェック
+  checkAlarms();
+  alarmInterval = setInterval(checkAlarms, 60 * 1000);
+}
+
+function checkAlarms() {
+  if (!schedules.length) return;
+
+  const now    = new Date();
+  const today  = now.toISOString().slice(0, 10);
+  const nowStr = pad(now.getHours()) + ':' + pad(now.getMinutes());
+
+  schedules.forEach(s => {
+    const nid = today + '_' + s.id;
+    if (s.time === nowStr && !notified.has(nid)) {
+      notified.add(nid);
+      fireNotification(s);
+    }
+  });
+}
+
+/* ══════════════════════════════════════════
+   NOTIFICATION 発火
+   ══════════════════════════════════════════ */
+function fireNotification(schedule) {
+  const catEmoji = {
+    general: '⏰', work: '💼', meal: '🍽️', exercise: '🏃', rest: '😴'
+  }[schedule.cat] || '⏰';
+
+  const title = catEmoji + ' ' + schedule.time + ' — ' + schedule.name;
+  const body  = '時間になりました！';
+
+  // アプリが前面にある場合はアプリ側の toast を使う
+  self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+    if (clients.length > 0) {
+      // フォアグラウンドのクライアントに通知を委譲
+      clients.forEach(c => c.postMessage({ type: 'ALARM', title, body }));
+    } else {
+      // バックグラウンド or ホーム画面 → OS 通知を発火
+      self.registration.showNotification(title, {
+        body,
+        icon:   './icon-192.png',
+        badge:  './icon-192.png',
+        tag:    'lifeflow-' + schedule.id,
+        renotify: true,
+        data:   { page: 'schedule' },
+      });
+    }
+  });
+}
+
+/* ══════════════════════════════════════════
+   NOTIFICATION CLICK — タップでアプリを開く
    ══════════════════════════════════════════ */
 self.addEventListener('notificationclick', event => {
   event.notification.close();
+  const page = (event.notification.data || {}).page || 'schedule';
 
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
-      // すでに開いているウィンドウがあればフォーカス
-      for (const client of clientList) {
-        if ('focus' in client) {
-          client.focus();
-          // スケジュールページへ遷移するよう伝達
-          client.postMessage({ type: 'OPEN_PAGE', page: 'schedule' });
-          return;
-        }
-      }
-      // なければ新規タブで開く
-      if (clients.openWindow) {
-        return clients.openWindow('./');
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+      // 既に開いているウィンドウがあればフォーカス
+      const existing = clients.find(c => c.url.includes('life-timer') || c.url.includes('localhost'));
+      if (existing) {
+        existing.focus();
+        existing.postMessage({ type: 'OPEN_PAGE', page });
+      } else {
+        // 新しいウィンドウで開く
+        self.clients.openWindow('./').then(win => {
+          if (win) win.postMessage({ type: 'OPEN_PAGE', page });
+        });
       }
     })
   );
 });
 
 /* ══════════════════════════════════════════
-   PERIODIC SYNC（対応ブラウザのみ）
-   SW が停止しても定期的に起こして通知を再スケジュール
+   UTILITY
    ══════════════════════════════════════════ */
-self.addEventListener('periodicsync', event => {
-  if (event.tag === 'lifeflow-daily-reschedule') {
-    event.waitUntil(rescheduleFromStorage());
-  }
-});
-
-/**
- * IndexedDB ではなく Cache API 経由でスケジュールを取得して再スケジュール
- * （SW は localStorage に直接アクセスできないため）
- */
-async function rescheduleFromStorage() {
-  // ページが開いていれば postMessage で最新データを要求
-  const allClients = await clients.matchAll({ includeUncontrolled: true });
-  if (allClients.length > 0) {
-    allClients[0].postMessage({ type: 'REQUEST_SCHEDULES' });
-  }
-}
+function pad(n) { return String(n).padStart(2, '0'); }
