@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=390, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0a0a0c">
+  <!-- iOS PWA アイコン（ホーム画面追加時） -->
+  <link rel="apple-touch-icon" href="icon-192.png">
   <title>LIFEFLOW</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
@@ -12,34 +16,46 @@
 </head>
 <body>
 
+  <!-- ── NOTIFICATION TOAST ── -->
   <div class="toast" id="toast">
-    <div class="toast-icon">&#x23F0;</div>
+    <div class="toast-icon">⏰</div>
     <div>
       <div class="toast-title" id="toast-title"></div>
       <div class="toast-body" id="toast-body"></div>
     </div>
   </div>
 
+  <!-- ══════════════════════════
+       PHONE FRAME WRAPPER
+  ══════════════════════════ -->
   <div class="phone-frame">
 
+    <!-- STATUS BAR -->
     <div class="status-bar">
       <span class="status-time" id="status-time">9:41</span>
+      <div class="status-icons">
+        <span>●●●</span>
+        <span>WiFi</span>
+        <span>🔋</span>
+      </div>
     </div>
 
-    <!-- HEADER：ハンバーガー左固定 / 中央にロゴ+秒表示時刻 / 右に日付 -->
+    <!-- HEADER -->
     <header class="app-header">
       <button class="hamburger" id="hamburger" aria-label="メニュー">
         <span></span><span></span><span></span>
       </button>
       <div class="header-center">
         <div class="logo">LIFEFLOW</div>
-        <div class="header-clock" id="header-clock">--:--:--</div>
+        <div class="header-clock" id="header-clock">--:--</div>
       </div>
       <div class="header-date" id="header-date"></div>
     </header>
 
+    <!-- DRAWER OVERLAY -->
     <div class="drawer-overlay" id="drawer-overlay"></div>
 
+    <!-- SIDE DRAWER -->
     <nav class="drawer" id="drawer" role="navigation">
       <div class="drawer-brand">
         <div class="drawer-logo">LIFEFLOW</div>
@@ -47,19 +63,19 @@
       </div>
       <ul class="drawer-nav">
         <li class="drawer-item active" data-page="schedule">
-          <span class="drawer-item-icon">&#x23F1;</span>
+          <span class="drawer-item-icon">⏱</span>
           <span class="drawer-item-label">スケジュール</span>
-          <span class="drawer-item-arrow">&#x203A;</span>
+          <span class="drawer-item-arrow">›</span>
         </li>
         <li class="drawer-item" data-page="inventory">
-          <span class="drawer-item-icon">&#x1F4E6;</span>
+          <span class="drawer-item-icon">📦</span>
           <span class="drawer-item-label">在庫管理</span>
-          <span class="drawer-item-arrow">&#x203A;</span>
+          <span class="drawer-item-arrow">›</span>
         </li>
         <li class="drawer-item" data-page="memo">
-          <span class="drawer-item-icon">&#x1F4DD;</span>
+          <span class="drawer-item-icon">📝</span>
           <span class="drawer-item-label">メモ帳</span>
-          <span class="drawer-item-arrow">&#x203A;</span>
+          <span class="drawer-item-arrow">›</span>
         </li>
       </ul>
       <div class="drawer-footer">
@@ -67,12 +83,16 @@
       </div>
     </nav>
 
+    <!-- ── SCROLL CONTAINER ── -->
     <div class="scroll-area">
 
-      <!-- PAGE: SCHEDULE -->
+      <!-- ════════════════════════
+           PAGE: SCHEDULE
+      ════════════════════════ -->
       <section class="page active" id="page-schedule">
 
-        <div class="timer-card">
+        <!-- Current event timer card -->
+        <div class="timer-card" id="timer-card">
           <div class="timer-card-label">現在のイベント</div>
           <div class="timer-event-name" id="timer-event-name">スケジュールを追加</div>
           <div class="timer-countdown" id="timer-countdown">--:--</div>
@@ -82,16 +102,15 @@
           </div>
         </div>
 
+        <!-- Add form -->
         <div class="form-card">
-          <div class="form-card-title">&#xFF0B; イベントを追加</div>
-
-          <!-- 時刻・カテゴリ：同じ高さで揃える -->
-          <div class="form-row-fields">
-            <div class="form-group">
+          <div class="form-card-title">＋ イベントを追加</div>
+          <div class="form-row">
+            <div class="form-group half">
               <label>時刻</label>
               <input type="time" id="sch-time">
             </div>
-            <div class="form-group">
+            <div class="form-group half">
               <label>カテゴリ</label>
               <select id="sch-cat">
                 <option value="general">一般</option>
@@ -102,45 +121,47 @@
               </select>
             </div>
           </div>
-
-          <!-- イベント名 -->
-          <div class="form-group sch-name-group">
+          <div class="form-group">
             <label>イベント名</label>
             <input type="text" id="sch-name" placeholder="例: 朝食、会議、散歩...">
           </div>
-
-          <!-- 間隔を開けたボタン -->
-          <button class="btn btn-primary full-width sch-btn-gap" id="sch-add-btn">追加する</button>
+          <button class="btn btn-primary full-width" id="sch-add-btn">追加する</button>
         </div>
 
+        <!-- Schedule list -->
         <div class="list-header">
           <span>本日のスケジュール</span>
           <span class="list-count" id="sch-count">0件</span>
         </div>
         <div class="schedule-list" id="schedule-list">
           <div class="empty-state">
-            <div class="empty-icon">&#x1F4C5;</div>
+            <div class="empty-icon">📅</div>
             <div class="empty-text">スケジュールがありません</div>
           </div>
         </div>
       </section>
 
-      <!-- PAGE: INVENTORY -->
+      <!-- ════════════════════════
+           PAGE: INVENTORY
+      ════════════════════════ -->
       <section class="page" id="page-inventory">
 
+        <!-- Low stock alert -->
         <div class="alert-banner" id="low-stock-banner">
-          <span class="alert-icon">&#x26A0;&#xFE0F;</span>
+          <span class="alert-icon">⚠️</span>
           <span id="low-stock-text">在庫が少ないアイテムがあります</span>
         </div>
 
+        <!-- Category tabs -->
         <div class="tab-bar">
           <button class="tab active" data-tab="all">すべて</button>
-          <button class="tab" data-tab="food">&#x1F96C; 食材</button>
-          <button class="tab" data-tab="daily">&#x1F9F4; 日用品</button>
+          <button class="tab" data-tab="food">🥬 食材</button>
+          <button class="tab" data-tab="daily">🧴 日用品</button>
         </div>
 
+        <!-- Add item form -->
         <div class="form-card">
-          <div class="form-card-title">&#xFF0B; アイテムを追加</div>
+          <div class="form-card-title">＋ アイテムを追加</div>
           <div class="form-row">
             <div class="form-group two-thirds">
               <label>アイテム名</label>
@@ -169,31 +190,48 @@
           <span id="inv-filter-label">すべてのアイテム</span>
           <span class="list-count" id="inv-count">0件</span>
         </div>
+
         <div class="inventory-grid" id="inventory-grid">
           <div class="empty-state full-col">
-            <div class="empty-icon">&#x1F4E6;</div>
+            <div class="empty-icon">📦</div>
             <div class="empty-text">アイテムがありません</div>
           </div>
         </div>
       </section>
 
-      <!-- PAGE: MEMO -->
+      <!-- ════════════════════════
+           PAGE: MEMO
+      ════════════════════════ -->
       <section class="page" id="page-memo">
+        <!-- Memo toolbar -->
         <div class="memo-toolbar">
-          <button class="btn btn-primary btn-sm" id="memo-new-btn">&#xFF0B; 新規</button>
+          <button class="btn btn-primary btn-sm" id="memo-new-btn">＋ 新規</button>
           <button class="btn btn-ghost btn-sm" id="memo-delete-btn">削除</button>
         </div>
-        <div class="memo-list-panel">
+
+        <!-- Memo list (collapsed/expanded) -->
+        <div class="memo-list-panel" id="memo-list-panel">
           <div class="memo-list" id="memo-list">
             <div class="empty-state">
-              <div class="empty-icon">&#x1F4DD;</div>
+              <div class="empty-icon">📝</div>
               <div class="empty-text">メモがありません</div>
             </div>
           </div>
         </div>
+
+        <!-- Memo editor -->
         <div class="memo-editor-panel">
-          <input type="text" class="memo-title-input" id="memo-title" placeholder="タイトルを入力...">
-          <textarea class="memo-body-input" id="memo-body" placeholder="ここにメモを入力してください..."></textarea>
+          <input
+            type="text"
+            class="memo-title-input"
+            id="memo-title"
+            placeholder="タイトルを入力..."
+          >
+          <textarea
+            class="memo-body-input"
+            id="memo-body"
+            placeholder="ここにメモを入力してください..."
+          ></textarea>
           <div class="memo-meta">
             <span id="memo-updated"></span>
             <span id="memo-chars">0文字</span>
@@ -201,25 +239,27 @@
         </div>
       </section>
 
-    </div>
+    </div><!-- /scroll-area -->
 
+    <!-- BOTTOM NAV BAR -->
     <nav class="bottom-nav">
       <button class="nav-btn active" data-page="schedule">
-        <span class="nav-icon">&#x23F1;</span>
+        <span class="nav-icon">⏱</span>
         <span class="nav-label">タイマー</span>
       </button>
       <button class="nav-btn" data-page="inventory">
-        <span class="nav-icon">&#x1F4E6;</span>
+        <span class="nav-icon">📦</span>
         <span class="nav-label">在庫</span>
       </button>
       <button class="nav-btn" data-page="memo">
-        <span class="nav-icon">&#x1F4DD;</span>
+        <span class="nav-icon">📝</span>
         <span class="nav-label">メモ</span>
       </button>
     </nav>
 
+    <!-- HOME INDICATOR -->
     <div class="home-indicator"></div>
-  </div>
+
   </div><!-- /phone-frame -->
 
   <script src="app.js"></script>
