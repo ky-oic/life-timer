@@ -48,8 +48,10 @@ function tickClock() {
   const date = now.toLocaleDateString('ja-JP', { month:'short', day:'numeric', weekday:'short' });
 
   $('status-time').textContent  = hm;
-  $('header-clock').textContent = hm;
-  $('header-date').textContent  = date;
+  const hcEl = $('header-clock');
+  if (hcEl) hcEl.textContent = hm;
+  const hdEl = $('header-date');
+  if (hdEl) hdEl.textContent = date;
 
   updateTimerDisplay(now);
   checkNotifications(now);
@@ -111,7 +113,40 @@ function closeDrawer() {
 }
 
 /* ══════════════════════════════════════════
-   TOAST NOTIFICATION
+   SERVICE WORKER 登録 & 通知許可
+   ══════════════════════════════════════════ */
+let swReg = null;
+
+async function initServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    swReg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+    navigator.serviceWorker.addEventListener('message', event => {
+      const { type, page } = event.data || {};
+      if (type === 'OPEN_PAGE' && page) switchPage(page);
+      if (type === 'REQUEST_SCHEDULES') syncSchedulesToSW();
+    });
+  } catch (err) {
+    console.warn('SW registration failed:', err);
+  }
+}
+
+function syncSchedulesToSW() {
+  if (!swReg || !swReg.active) return;
+  swReg.active.postMessage({ type: 'SYNC_SCHEDULES', payload: { schedules } });
+}
+
+async function requestNotificationPermission() {
+  if (!('Notification' in window)) return 'unsupported';
+  if (Notification.permission === 'granted') { syncSchedulesToSW(); return 'granted'; }
+  if (Notification.permission === 'denied') return 'denied';
+  const result = await Notification.requestPermission();
+  if (result === 'granted') syncSchedulesToSW();
+  return result;
+}
+
+/* ══════════════════════════════════════════
+   TOAST NOTIFICATION（アプリ前面時のインアプリ通知）
    ══════════════════════════════════════════ */
 let toastTimer = null;
 function showToast(title, body) {
@@ -120,15 +155,6 @@ function showToast(title, body) {
   $('toast').classList.add('show');
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => $('toast').classList.remove('show'), 4500);
-
-  // Native notification
-  if ('Notification' in window && Notification.permission === 'granted') {
-    new Notification(title, { body, silent: false });
-  }
-}
-
-if ('Notification' in window && Notification.permission === 'default') {
-  Notification.requestPermission();
 }
 
 /* ══════════════════════════════════════════
@@ -152,6 +178,7 @@ function addSchedule() {
   schedules.push({ id: Date.now(), time, name, cat });
   schedules.sort((a, b) => a.time.localeCompare(b.time));
   save('lf_schedules', schedules);
+  syncSchedulesToSW();
   $('sch-name').value = '';
   renderScheduleList();
 }
@@ -159,6 +186,7 @@ function addSchedule() {
 function removeSchedule(id) {
   schedules = schedules.filter(s => s.id !== id);
   save('lf_schedules', schedules);
+  syncSchedulesToSW();
   renderScheduleList();
 }
 
@@ -503,7 +531,7 @@ function fmtDate(iso) {
 /* ══════════════════════════════════════════
    INIT
    ══════════════════════════════════════════ */
-(function init() {
+(async function init() {
   renderScheduleList();
   renderInventory();
   renderMemoList();
@@ -511,4 +539,8 @@ function fmtDate(iso) {
     const m = memos.find(m => m.id === activeMemoId);
     if (m) loadMemoEditor(m);
   }
+
+  // Service Worker 登録 → 通知許可取得 → スケジュール同期
+  await initServiceWorker();
+  await requestNotificationPermission();
 })();
