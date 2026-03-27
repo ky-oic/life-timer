@@ -121,6 +121,38 @@ function syncSchedulesToSW() {
   swReg.active.postMessage({ type: 'SYNC_SCHEDULES', payload: { schedules } });
 }
 
+/* 通知許可ボタンの表示/非表示を制御 */
+function updateNotifButton() {
+  const btn = document.getElementById('notif-permission-btn');
+  if (!btn) return;
+  if (!('Notification' in window)) {
+    btn.style.display = 'none';
+    return;
+  }
+  if (Notification.permission === 'granted') {
+    btn.style.display = 'none';   // 許可済みなら隠す
+  } else if (Notification.permission === 'denied') {
+    btn.textContent = '⚠️ 通知がブロックされています';
+    btn.style.background = 'rgba(255,71,71,0.15)';
+    btn.style.color = '#ff9494';
+    btn.style.borderColor = 'rgba(255,71,71,0.4)';
+    btn.style.display = 'flex';
+  } else {
+    btn.style.display = 'flex';   // default → ボタンを表示
+  }
+}
+
+/* 通知許可ボタンのクリック処理 */
+async function requestNotifPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'denied') return;
+  const result = await Notification.requestPermission();
+  if (result === 'granted') {
+    syncSchedulesToSW();
+  }
+  updateNotifButton();
+}
+
 /* ══════════════════════════════════════════
    TOAST NOTIFICATION（アプリ前面時）
    ══════════════════════════════════════════ */
@@ -132,6 +164,35 @@ function showToast(title, body) {
   $('toast').classList.add('show');
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => $('toast').classList.remove('show'), 4500);
+}
+
+/* ══════════════════════════════════════════
+   通知許可バナー管理
+   ══════════════════════════════════════════ */
+function updateNotifBanner() {
+  const banner = $('notif-banner');
+  if (!banner) return;
+  if (!('Notification' in window)) {
+    banner.style.display = 'none';
+    return;
+  }
+  if (Notification.permission === 'granted') {
+    banner.style.display = 'none';
+    syncSchedulesToSW();
+  } else if (Notification.permission === 'denied') {
+    banner.style.display = 'none'; // 拒否済みは何もできないので非表示
+  } else {
+    banner.style.display = 'flex'; // defaultなら表示
+  }
+}
+
+async function requestNotifFromButton() {
+  if (!('Notification' in window)) return;
+  const result = await Notification.requestPermission();
+  if (result === 'granted') {
+    syncSchedulesToSW();
+  }
+  updateNotifBanner();
 }
 
 /* ══════════════════════════════════════════
@@ -487,12 +548,6 @@ function fmtDate(iso) {
   // Service Worker 登録
   await initServiceWorker();
 
-  // 通知許可ダイアログを表示
-  if ('Notification' in window && Notification.permission === 'default') {
-    await Notification.requestPermission();
-  }
-  // 許可済みならSWにスケジュールを同期
-  if ('Notification' in window && Notification.permission === 'granted') {
-    syncSchedulesToSW();
-  }
+  // 通知バナーの状態を更新（起動時）
+  updateNotifBanner();
 })();
