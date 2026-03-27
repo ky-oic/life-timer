@@ -147,32 +147,28 @@ async function requestNotifPermission() {
       userVisibleOnly:      true,
       applicationServerKey: urlBase64ToUint8Array(vapidKey),
     });
-    // 3. 購読情報をサーバーに保存
+    // 3. 購読情報を確認（ステートレスなのでOKを返すだけ）
     await fetch('/api/subscribe', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ subscription: pushSub }),
+      body:    JSON.stringify({ subscription: pushSub.toJSON() }),
     });
-    // 4. 現在のスケジュールをサーバーに同期
-    await syncSchedules();
+    // 4. SWにスケジュールを渡してタイマーをセット
+    syncSchedules();
   } catch (err) {
     console.warn('Push subscribe failed:', err);
   }
   updateNotifButton();
 }
 
-/* スケジュールをサーバーに送って通知を予約 */
-async function syncSchedules() {
-  if (!pushSub || !schedules.length) return;
-  try {
-    await fetch('/api/schedule', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ subscription: pushSub, schedules }),
-    });
-  } catch (err) {
-    console.warn('syncSchedules failed:', err);
-  }
+/* スケジュールをSWに渡してタイマーをセット */
+function syncSchedules() {
+  if (!swReg || !swReg.active || !pushSub) return;
+  swReg.active.postMessage({
+    type:         'SYNC_SCHEDULES',
+    schedules:    schedules,
+    subscription: pushSub.toJSON ? pushSub.toJSON() : pushSub,
+  });
 }
 
 /* ── TOAST（アプリ前面時） ── */
