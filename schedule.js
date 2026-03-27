@@ -1,7 +1,7 @@
 /**
- * api/schedule.js
- * スケジュールを受け取り、各時刻にWeb Pushを送信する
- * Vercel はサーバーレスなので setTimeout で予約する
+ * api/send.js
+ * 即時プッシュ通知送信
+ * app.js がスケジュール時刻の1秒前にここを呼ぶ
  */
 import webpush from 'web-push';
 
@@ -19,52 +19,22 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { subscription, schedules } = req.body;
+    const { subscription, title, body } = req.body;
 
-    if (!subscription || !Array.isArray(schedules)) {
-      return res.status(400).json({ error: 'subscription and schedules are required' });
+    if (!subscription || !title) {
+      return res.status(400).json({ error: 'subscription and title required' });
     }
 
-    const now    = new Date();
-    const pushed = [];
+    const payload = JSON.stringify({ title, body: body || '' });
+    await webpush.sendNotification(subscription, payload);
 
-    // 各スケジュールに対してタイマーをセット
-    for (const s of schedules) {
-      const [h, m] = s.time.split(':').map(Number);
-      const fireAt = new Date(now);
-      fireAt.setHours(h, m, 0, 0);
-      const msUntil = fireAt.getTime() - now.getTime();
-
-      // 過去 or 10秒未満はスキップ
-      if (msUntil < 10000) continue;
-
-      const catEmoji = { general:'⏰', work:'💼', meal:'🍽️', exercise:'🏃', rest:'😴' }[s.cat] || '⏰';
-      const catLabel = { general:'一般', work:'仕事', meal:'食事', exercise:'運動', rest:'休憩' }[s.cat] || '';
-
-      const payload = JSON.stringify({
-        title: `${catEmoji} ${s.time} — ${s.name}`,
-        body:  `${catLabel}の時間です！`,
-      });
-
-      // Vercel のサーバーレス関数は最大10秒で終了するので
-      // msUntil が小さいものだけ直接 setTimeout で送信
-      // 大きいものは Vercel Cron / KV で管理する（今回は10分以内のみ直接送信）
-      if (msUntil <= 10 * 60 * 1000) {
-        setTimeout(async () => {
-          try {
-            await webpush.sendNotification(subscription, payload);
-          } catch (e) {
-            console.error('push error:', e.message);
-          }
-        }, msUntil);
-        pushed.push({ time: s.time, name: s.name, msUntil });
-      }
-    }
-
-    return res.status(200).json({ ok: true, scheduled: pushed.length, items: pushed });
-
+    return res.status(200).json({ ok: true });
   } catch (err) {
-    console.error('schedule error:', err);
+    console.error('send error:', err);
+    // 購読が無効になった場合（410）は正常扱いにして再購読を促す
+    if (err.statusCode === 410) {
+      return res.status(410).json({ error: 'subscription_expired' });
+    }
     return res.status(500).json({ error: err.message });
   }
 }
