@@ -1,6 +1,6 @@
 /**
  * LIFEFLOW — app.js
- * 生活タイマーアプリ（Service Worker 通知連携版）
+ * 生活タイマーアプリ
  */
 
 'use strict';
@@ -33,7 +33,7 @@ const $ = id => document.getElementById(id);
 
 const create = (tag, cls, html) => {
   const el = document.createElement(tag);
-  if (cls)               el.className = cls;
+  if (cls)              el.className = cls;
   if (html !== undefined) el.innerHTML = html;
   return el;
 };
@@ -52,7 +52,7 @@ function tickClock() {
   $('header-date').textContent  = date;
 
   updateTimerDisplay(now);
-  checkNotifications(now); // フォアグラウンド時の補助チェック
+  checkNotifications(now);
 }
 
 setInterval(tickClock, 1000);
@@ -98,40 +98,31 @@ function closeDrawer() {
 }
 
 /* ══════════════════════════════════════════
-   SERVICE WORKER 登録 & 連携
+   SERVICE WORKER 登録 & 通知
    ══════════════════════════════════════════ */
 let swReg = null;
 
 async function initServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   try {
-    swReg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
-    console.log('[LIFEFLOW] SW registered:', swReg.scope);
-
-    // SW からのメッセージを受信
+    swReg = await navigator.serviceWorker.register('./sw.js');
     navigator.serviceWorker.addEventListener('message', event => {
-      const { type, title, body, page } = event.data || {};
-      // SW がアプリ前面を検知してトーストに委譲してきた場合
-      if (type === 'ALARM') showToast(title, body);
-      // 通知タップでページ遷移
+      const { type, page } = event.data || {};
       if (type === 'OPEN_PAGE' && page) switchPage(page);
+      if (type === 'REQUEST_SCHEDULES') syncSchedulesToSW();
     });
-
   } catch (err) {
-    console.warn('[LIFEFLOW] SW registration failed:', err);
+    console.warn('SW registration failed:', err);
   }
 }
 
-/** スケジュールを SW に同期（追加・削除のたびに呼ぶ） */
 function syncSchedulesToSW() {
-  if (!swReg) return;
-  const target = swReg.active || swReg.installing || swReg.waiting;
-  if (!target) return;
-  target.postMessage({ type: 'SYNC_SCHEDULES', payload: { schedules } });
+  if (!swReg || !swReg.active) return;
+  swReg.active.postMessage({ type: 'SYNC_SCHEDULES', payload: { schedules } });
 }
 
 /* ══════════════════════════════════════════
-   TOAST NOTIFICATION（フォアグラウンド時）
+   TOAST NOTIFICATION（アプリ前面時）
    ══════════════════════════════════════════ */
 let toastTimer = null;
 
@@ -163,7 +154,7 @@ function addSchedule() {
   schedules.push({ id: Date.now(), time, name, cat });
   schedules.sort((a, b) => a.time.localeCompare(b.time));
   save('lf_schedules', schedules);
-  syncSchedulesToSW();   // ← SW に伝える
+  syncSchedulesToSW();
   $('sch-name').value = '';
   renderScheduleList();
 }
@@ -171,7 +162,7 @@ function addSchedule() {
 function removeSchedule(id) {
   schedules = schedules.filter(s => s.id !== id);
   save('lf_schedules', schedules);
-  syncSchedulesToSW();   // ← SW に伝える
+  syncSchedulesToSW();
   renderScheduleList();
 }
 
@@ -278,12 +269,10 @@ function formatCountdown(totalSec) {
   return pad(m) + ':' + pad(s);
 }
 
-/** フォアグラウンド時の補助チェック（SW が止まっている場合の保険） */
 function checkNotifications(now) {
   if (now.getSeconds() !== 0) return;
   const key    = now.toISOString().slice(0, 10);
   const nowStr = pad(now.getHours()) + ':' + pad(now.getMinutes());
-
   schedules.forEach(s => {
     const nid = key + '_' + s.id;
     if (s.time === nowStr && !notified.has(nid)) {
@@ -495,18 +484,15 @@ function fmtDate(iso) {
     if (m) loadMemoEditor(m);
   }
 
-  // 1. Service Worker を登録
+  // Service Worker 登録
   await initServiceWorker();
 
-  // 2. 通知許可を求める
+  // 通知許可ダイアログを表示
   if ('Notification' in window && Notification.permission === 'default') {
-    const perm = await Notification.requestPermission();
-    console.log('[LIFEFLOW] Notification permission:', perm);
+    await Notification.requestPermission();
   }
-
-  // 3. 許可済みなら SW にスケジュールを同期
+  // 許可済みならSWにスケジュールを同期
   if ('Notification' in window && Notification.permission === 'granted') {
-    // SW がアクティブになるのを少し待つ
-    setTimeout(syncSchedulesToSW, 1000);
+    syncSchedulesToSW();
   }
 })();
