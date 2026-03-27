@@ -1,24 +1,16 @@
 /**
- * LIFEFLOW — app.js
- * 生活タイマーアプリ
+ * LIFEFLOW — app.js  (Web Push API 対応版)
  */
-
 'use strict';
 
-/* ══════════════════════════════════════════
-   STORAGE HELPERS
-   ══════════════════════════════════════════ */
+/* ── STORAGE ── */
 function load(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
   catch { return fallback; }
 }
-function save(key, val) {
-  localStorage.setItem(key, JSON.stringify(val));
-}
+function save(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
 
-/* ══════════════════════════════════════════
-   STATE
-   ══════════════════════════════════════════ */
+/* ── STATE ── */
 let schedules    = load('lf_schedules', []);
 let inventory    = load('lf_inventory', []);
 let memos        = load('lf_memos',     []);
@@ -26,66 +18,47 @@ let invFilter    = 'all';
 let activeMemoId = memos.length ? memos[0].id : null;
 let notified     = new Set(load('lf_notified', []));
 
-/* ══════════════════════════════════════════
-   DOM HELPERS
-   ══════════════════════════════════════════ */
+/* ── DOM ── */
 const $ = id => document.getElementById(id);
-
 const create = (tag, cls, html) => {
   const el = document.createElement(tag);
-  if (cls)              el.className = cls;
+  if (cls) el.className = cls;
   if (html !== undefined) el.innerHTML = html;
   return el;
 };
 
-/* ══════════════════════════════════════════
-   CLOCK — 秒まで表示 (HH:MM:SS)
-   ══════════════════════════════════════════ */
+/* ── CLOCK ── */
 function tickClock() {
   const now  = new Date();
-  const hm   = now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
-  const hms  = now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const date = now.toLocaleDateString('ja-JP', { month: 'short', day: 'numeric', weekday: 'short' });
-
+  const hm   = now.toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit' });
+  const hms  = now.toLocaleTimeString('ja-JP', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  const date = now.toLocaleDateString('ja-JP', { month:'short', day:'numeric', weekday:'short' });
   $('status-time').textContent  = hm;
-  $('header-clock').textContent = hms;
+  const hcEl = $('header-clock'); if (hcEl) hcEl.textContent = hms;
   $('header-date').textContent  = date;
-
   updateTimerDisplay(now);
   checkNotifications(now);
 }
-
 setInterval(tickClock, 1000);
 tickClock();
 
-/* ══════════════════════════════════════════
-   NAVIGATION
-   ══════════════════════════════════════════ */
+/* ── NAVIGATION ── */
 function switchPage(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   $('page-' + page).classList.add('active');
-
-  document.querySelectorAll('.nav-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.page === page);
-  });
-  document.querySelectorAll('.drawer-item').forEach(i => {
-    i.classList.toggle('active', i.dataset.page === page);
-  });
-
+  document.querySelectorAll('.nav-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.page === page));
+  document.querySelectorAll('.drawer-item').forEach(i =>
+    i.classList.toggle('active', i.dataset.page === page));
   closeDrawer();
   if (page === 'memo') renderMemoList();
 }
-
-document.querySelectorAll('.nav-btn').forEach(btn => {
-  btn.addEventListener('click', () => switchPage(btn.dataset.page));
-});
-document.querySelectorAll('.drawer-item').forEach(item => {
-  item.addEventListener('click', () => switchPage(item.dataset.page));
-});
-
+document.querySelectorAll('.nav-btn').forEach(btn =>
+  btn.addEventListener('click', () => switchPage(btn.dataset.page)));
+document.querySelectorAll('.drawer-item').forEach(item =>
+  item.addEventListener('click', () => switchPage(item.dataset.page)));
 $('hamburger').addEventListener('click', toggleDrawer);
 $('drawer-overlay').addEventListener('click', closeDrawer);
-
 function toggleDrawer() {
   const open = $('drawer').classList.toggle('open');
   $('drawer-overlay').classList.toggle('open', open);
@@ -97,67 +70,113 @@ function closeDrawer() {
   $('hamburger').classList.remove('open');
 }
 
-/* ══════════════════════════════════════════
-   SERVICE WORKER 登録 & 通知
-   ══════════════════════════════════════════ */
-let swReg = null;
+/* ════════════════════════════════════════
+   SERVICE WORKER & WEB PUSH
+   ════════════════════════════════════════ */
+let swReg   = null;
+let pushSub = null;
 
+/* SW登録 */
 async function initServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   try {
     swReg = await navigator.serviceWorker.register('./sw.js');
-    navigator.serviceWorker.addEventListener('message', event => {
-      const { type, page } = event.data || {};
-      if (type === 'OPEN_PAGE' && page) switchPage(page);
-      if (type === 'REQUEST_SCHEDULES') syncSchedulesToSW();
-    });
+    await navigator.serviceWorker.ready;
+    // 既存のPush購読を取得
+    pushSub = await swReg.pushManager.getSubscription();
   } catch (err) {
     console.warn('SW registration failed:', err);
   }
 }
 
-function syncSchedulesToSW() {
-  if (!swReg || !swReg.active) return;
-  swReg.active.postMessage({ type: 'SYNC_SCHEDULES', payload: { schedules } });
+/* base64url → Uint8Array */
+function urlBase64ToUint8Array(b64) {
+  const pad = '='.repeat((4 - b64.length % 4) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
 
-/* 通知許可ボタンの表示/非表示を制御 */
+/* VAPID公開鍵をサーバーから取得 */
+async function getVapidPublicKey() {
+  try {
+    const res = await fetch('/api/vapid-public-key');
+    const { publicKey } = await res.json();
+    return publicKey;
+  } catch { return null; }
+}
+
+/* 通知許可ボタンの表示制御 */
 function updateNotifButton() {
-  const btn = document.getElementById('notif-permission-btn');
+  const btn = $('notif-permission-btn');
   if (!btn) return;
-  if (!('Notification' in window)) {
-    btn.style.display = 'none';
-    return;
+  if (!('Notification' in window) || !('PushManager' in window)) {
+    btn.style.display = 'none'; return;
   }
-  if (Notification.permission === 'granted') {
-    btn.style.display = 'none';   // 許可済みなら隠す
+  if (Notification.permission === 'granted' && pushSub) {
+    btn.style.display = 'none';
   } else if (Notification.permission === 'denied') {
-    btn.textContent = '⚠️ 通知がブロックされています';
-    btn.style.background = 'rgba(255,71,71,0.15)';
-    btn.style.color = '#ff9494';
-    btn.style.borderColor = 'rgba(255,71,71,0.4)';
-    btn.style.display = 'flex';
+    btn.textContent = '⚠️ 通知がブロックされています（設定から許可してください）';
+    btn.style.background    = 'rgba(255,71,71,0.15)';
+    btn.style.color         = '#ff9494';
+    btn.style.borderColor   = 'rgba(255,71,71,0.4)';
+    btn.style.display       = 'flex';
   } else {
-    btn.style.display = 'flex';   // default → ボタンを表示
+    btn.textContent = '🔔 通知を有効にする（タップして許可）';
+    btn.style.background    = 'rgba(200,255,71,0.08)';
+    btn.style.color         = '#c8ff47';
+    btn.style.borderColor   = 'rgba(200,255,71,0.3)';
+    btn.style.display       = 'flex';
   }
 }
 
-/* 通知許可ボタンのクリック処理 */
+/* 通知許可ボタンのクリック → Push購読 */
 async function requestNotifPermission() {
   if (!('Notification' in window)) return;
   if (Notification.permission === 'denied') return;
+
+  // 1. iOSの通知許可ダイアログ（ユーザー操作が必要）
   const result = await Notification.requestPermission();
-  if (result === 'granted') {
-    syncSchedulesToSW();
+  if (result !== 'granted') { updateNotifButton(); return; }
+
+  // 2. VAPID公開鍵を取得してPush購読
+  const vapidKey = await getVapidPublicKey();
+  if (!vapidKey || !swReg) { updateNotifButton(); return; }
+
+  try {
+    pushSub = await swReg.pushManager.subscribe({
+      userVisibleOnly:      true,
+      applicationServerKey: urlBase64ToUint8Array(vapidKey),
+    });
+    // 3. 購読情報をサーバーに保存
+    await fetch('/api/subscribe', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ subscription: pushSub }),
+    });
+    // 4. 現在のスケジュールをサーバーに同期
+    await syncSchedules();
+  } catch (err) {
+    console.warn('Push subscribe failed:', err);
   }
   updateNotifButton();
 }
 
-/* ══════════════════════════════════════════
-   TOAST NOTIFICATION（アプリ前面時）
-   ══════════════════════════════════════════ */
-let toastTimer = null;
+/* スケジュールをサーバーに送って通知を予約 */
+async function syncSchedules() {
+  if (!pushSub || !schedules.length) return;
+  try {
+    await fetch('/api/schedule', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ subscription: pushSub, schedules }),
+    });
+  } catch (err) {
+    console.warn('syncSchedules failed:', err);
+  }
+}
 
+/* ── TOAST（アプリ前面時） ── */
+let toastTimer = null;
 function showToast(title, body) {
   $('toast-title').textContent = title;
   $('toast-body').textContent  = body;
@@ -166,38 +185,9 @@ function showToast(title, body) {
   toastTimer = setTimeout(() => $('toast').classList.remove('show'), 4500);
 }
 
-/* ══════════════════════════════════════════
-   通知許可バナー管理
-   ══════════════════════════════════════════ */
-function updateNotifBanner() {
-  const banner = $('notif-banner');
-  if (!banner) return;
-  if (!('Notification' in window)) {
-    banner.style.display = 'none';
-    return;
-  }
-  if (Notification.permission === 'granted') {
-    banner.style.display = 'none';
-    syncSchedulesToSW();
-  } else if (Notification.permission === 'denied') {
-    banner.style.display = 'none'; // 拒否済みは何もできないので非表示
-  } else {
-    banner.style.display = 'flex'; // defaultなら表示
-  }
-}
-
-async function requestNotifFromButton() {
-  if (!('Notification' in window)) return;
-  const result = await Notification.requestPermission();
-  if (result === 'granted') {
-    syncSchedulesToSW();
-  }
-  updateNotifBanner();
-}
-
-/* ══════════════════════════════════════════
+/* ════════════════════════════════════════
    PAGE 1: SCHEDULE
-   ══════════════════════════════════════════ */
+   ════════════════════════════════════════ */
 $('sch-add-btn').addEventListener('click', addSchedule);
 $('sch-name').addEventListener('keydown', e => { if (e.key === 'Enter') addSchedule(); });
 
@@ -205,17 +195,15 @@ function addSchedule() {
   const time = $('sch-time').value;
   const name = $('sch-name').value.trim();
   const cat  = $('sch-cat').value;
-
   if (!time || !name) {
     $('sch-name').style.borderColor = 'var(--danger)';
     setTimeout(() => $('sch-name').style.borderColor = '', 800);
     return;
   }
-
   schedules.push({ id: Date.now(), time, name, cat });
   schedules.sort((a, b) => a.time.localeCompare(b.time));
   save('lf_schedules', schedules);
-  syncSchedulesToSW();
+  syncSchedules();          // サーバーに通知予約を送る
   $('sch-name').value = '';
   renderScheduleList();
 }
@@ -223,39 +211,33 @@ function addSchedule() {
 function removeSchedule(id) {
   schedules = schedules.filter(s => s.id !== id);
   save('lf_schedules', schedules);
-  syncSchedulesToSW();
+  syncSchedules();
   renderScheduleList();
 }
 
 function renderScheduleList() {
   const list = $('schedule-list');
   $('sch-count').textContent = schedules.length + '件';
-
   if (!schedules.length) {
     list.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x1F4C5;</div><div class="empty-text">スケジュールがありません</div></div>';
     return;
   }
-
   const now    = new Date();
   const nowMin = now.getHours() * 60 + now.getMinutes();
   const curIdx = getCurrentEventIndex(nowMin);
-
   list.innerHTML = '';
   schedules.forEach((s, i) => {
     const [h, m] = s.time.split(':').map(Number);
     const min    = h * 60 + m;
     const isCur  = i === curIdx;
     const isPast = min < nowMin && !isCur;
-
-    const item = create('div', 'schedule-item' + (isCur ? ' is-current' : '') + (isPast ? ' is-past' : ''));
-    const catBadge = { general: '一般', work: '仕事', meal: '食事', exercise: '運動', rest: '休憩' }[s.cat] || s.cat;
-
+    const item   = create('div', 'schedule-item' + (isCur ? ' is-current' : '') + (isPast ? ' is-past' : ''));
+    const catBadge = { general:'一般', work:'仕事', meal:'食事', exercise:'運動', rest:'休憩' }[s.cat] || s.cat;
     item.innerHTML =
       '<span class="sch-time">' + s.time + '</span>' +
       '<span class="sch-name">' + escHtml(s.name) + '</span>' +
       '<span class="sch-badge ' + s.cat + '">' + catBadge + '</span>' +
       '<button class="sch-delete" aria-label="削除">&times;</button>';
-
     item.querySelector('.sch-delete').addEventListener('click', () => removeSchedule(s.id));
     list.appendChild(item);
   });
@@ -265,19 +247,11 @@ function updateTimerDisplay(now) {
   const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
   const nowMin = Math.floor(nowSec / 60);
   if (!schedules.length) return;
-
   const curIdx = getCurrentEventIndex(nowMin);
   const cur    = curIdx >= 0 ? schedules[curIdx] : null;
-  const next   = schedules.find(s => {
-    const [h, m] = s.time.split(':').map(Number);
-    return h * 60 + m > nowMin;
-  });
-
-  const nameEl  = $('timer-event-name');
-  const countEl = $('timer-countdown');
-  const nextEl  = $('timer-next-label');
-  const fillEl  = $('timer-progress-fill');
-
+  const next   = schedules.find(s => { const [h,m]=s.time.split(':').map(Number); return h*60+m > nowMin; });
+  const nameEl = $('timer-event-name'), countEl = $('timer-countdown');
+  const nextEl = $('timer-next-label'), fillEl  = $('timer-progress-fill');
   if (cur) {
     nameEl.textContent = cur.name;
     if (next) {
@@ -289,9 +263,8 @@ function updateTimerDisplay(now) {
         nextEl.textContent  = '次: ' + next.time + ' ' + next.name;
         const [ch, cm] = cur.time.split(':').map(Number);
         const startSec = ch * 3600 + cm * 60;
-        const total    = targetSec - startSec;
-        const elapsed  = nowSec - startSec;
-        fillEl.style.width = (total > 0 ? Math.min(100, elapsed / total * 100) : 0) + '%';
+        const total = targetSec - startSec;
+        fillEl.style.width = (total > 0 ? Math.min(100, (nowSec-startSec)/total*100) : 0) + '%';
       }
     } else {
       countEl.textContent = '終了';
@@ -306,7 +279,7 @@ function updateTimerDisplay(now) {
     nextEl.textContent  = '次: ' + next.time + ' ' + next.name;
     fillEl.style.width  = '0%';
   } else {
-    nameEl.textContent  = 'スケジュールを追加';
+    nameEl.textContent = 'スケジュールを追加';
     countEl.textContent = '--:--';
     nextEl.textContent  = '';
     fillEl.style.width  = '0%';
@@ -326,8 +299,7 @@ function formatCountdown(totalSec) {
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
-  if (h > 0) return pad(h) + ':' + pad(m) + ':' + pad(s);
-  return pad(m) + ':' + pad(s);
+  return h > 0 ? pad(h)+':'+pad(m)+':'+pad(s) : pad(m)+':'+pad(s);
 }
 
 function checkNotifications(now) {
@@ -344,9 +316,9 @@ function checkNotifications(now) {
   });
 }
 
-/* ══════════════════════════════════════════
+/* ════════════════════════════════════════
    PAGE 2: INVENTORY
-   ══════════════════════════════════════════ */
+   ════════════════════════════════════════ */
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -355,7 +327,6 @@ document.querySelectorAll('.tab').forEach(tab => {
     renderInventory();
   });
 });
-
 $('inv-add-btn').addEventListener('click', addInventory);
 $('inv-name').addEventListener('keydown', e => { if (e.key === 'Enter') addInventory(); });
 
@@ -391,13 +362,11 @@ function removeInventory(id) {
 
 function renderInventory() {
   const grid = $('inventory-grid');
-  const catLabel    = { food: '食材', daily: '日用品' };
-  const filterLabel = { all: 'すべてのアイテム', food: '食材', daily: '日用品' };
+  const catLabel    = { food:'食材', daily:'日用品' };
+  const filterLabel = { all:'すべてのアイテム', food:'食材', daily:'日用品' };
   const filtered = invFilter === 'all' ? inventory : inventory.filter(i => i.cat === invFilter);
-
   $('inv-count').textContent        = filtered.length + '件';
   $('inv-filter-label').textContent = filterLabel[invFilter];
-
   const lowItems = inventory.filter(i => i.qty <= i.threshold);
   const banner   = $('low-stock-banner');
   if (lowItems.length) {
@@ -406,12 +375,10 @@ function renderInventory() {
   } else {
     banner.classList.remove('visible');
   }
-
   if (!filtered.length) {
     grid.innerHTML = '<div class="empty-state full-col"><div class="empty-icon">&#x1F4E6;</div><div class="empty-text">アイテムがありません</div></div>';
     return;
   }
-
   grid.innerHTML = '';
   filtered.forEach(item => {
     const isLow = item.qty <= item.threshold;
@@ -433,9 +400,9 @@ function renderInventory() {
   });
 }
 
-/* ══════════════════════════════════════════
+/* ════════════════════════════════════════
    PAGE 3: MEMO
-   ══════════════════════════════════════════ */
+   ════════════════════════════════════════ */
 $('memo-new-btn').addEventListener('click', newMemo);
 $('memo-delete-btn').addEventListener('click', deleteMemo);
 $('memo-title').addEventListener('input', saveMemo);
@@ -513,29 +480,18 @@ function renderMemoList() {
   });
 }
 
-/* ══════════════════════════════════════════
-   UTILITIES
-   ══════════════════════════════════════════ */
+/* ── UTILITIES ── */
 function pad(n) { return String(n).padStart(2, '0'); }
-
 function escHtml(str) {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-
 function fmtDate(iso) {
-  return new Date(iso).toLocaleString('ja-JP', {
-    month: 'numeric', day: 'numeric',
-    hour: '2-digit', minute: '2-digit'
-  });
+  return new Date(iso).toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
 }
 
-/* ══════════════════════════════════════════
+/* ════════════════════════════════════════
    INIT
-   ══════════════════════════════════════════ */
+   ════════════════════════════════════════ */
 (async function init() {
   renderScheduleList();
   renderInventory();
@@ -544,10 +500,10 @@ function fmtDate(iso) {
     const m = memos.find(m => m.id === activeMemoId);
     if (m) loadMemoEditor(m);
   }
-
-  // Service Worker 登録
   await initServiceWorker();
-
-  // 通知バナーの状態を更新（起動時）
-  updateNotifBanner();
+  updateNotifButton();
+  // すでに購読済みならスケジュール同期
+  if (pushSub && Notification.permission === 'granted') {
+    syncSchedules();
+  }
 })();
