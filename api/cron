@@ -28,8 +28,13 @@ async function redisKeys(url, token, pattern) {
 }
 
 export default async function handler(req, res) {
-  // Vercel Cronからの認証確認
-  if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
+  // GET・POSTどちらも許可（GitHub ActionsはGETで呼ぶ）
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  // 認証確認
+  const authHeader = req.headers['authorization'] || '';
+  const secret = process.env.CRON_SECRET;
+  if (secret && authHeader !== `Bearer ${secret}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
