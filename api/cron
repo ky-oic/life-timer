@@ -1,0 +1,73 @@
+/**
+ * api/cron.js
+ * Vercel Cronが毎分呼び出す → KVからスケジュールを読んで時刻一致なら通知送信
+ * vercel.json で "crons" を設定する
+ */
+import webpush from 'web-push';
+
+webpush.setVapidDetails(
+  'mailto:lifeflow@example.com',
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
+
+export default async function handler(req, res) {
+  // Vercel Cron からのリクエストのみ許可
+  if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (!process.env.KV_REST_API_URL) {
+    return res.status(200).json({ ok: true, skipped: 'KV not configured' });
+  }
+
+  try {
+    // 日本時間で現在の HH:MM を取得
+    const now = new Date();
+    const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000); // UTC+9
+    const hh  = String(jst.getUTCHours()).padStart(2, '0');
+    const mm  = String(jst.getUTCMinutes()).padStart(2, '0');
+    const nowStr = `${hh}:${mm}`;
+
+    // KVから全購読キーを取得
+    const listRes = await fetch(`${process.env.KV_REST_API_URL}/keys/sub_*`, {
+      headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` },
+    });
+    const listData = await listRes.json();
+    const keys = listData.result || [];
+
+    const results = [];
+    for (const key of keys) {
+      try {
+        const getRes = await fetch(`${process.env.KV_REST_API_URL}/get/${key}`, {
+          headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` },
+        });
+        const getData = await getRes.json();
+        if (!getData.result) continue;
+
+        const { subscription, schedules } = JSON.parse(getData.result);
+        if (!subscription || !Array.isArray(schedules)) continue;
+
+        // 現在時刻と一致するスケジュールを探す
+        const matched = schedules.filter(s => s.time === nowStr);
+        for (const s of matched) {
+          const catEmoji = { general:'⏰', work:'💼', meal:'🍽️', exercise:'🏃', rest:'😴' }[s.cat] || '⏰';
+          const catLabel = { general:'一般', work:'仕事', meal:'食事', exercise:'運動', rest:'休憩' }[s.cat] || '';
+          const payload  = JSON.stringify({
+            title: `${catEmoji} ${s.time} — ${s.name}`,
+            body:  `${catLabel}の時間です！`,
+          });
+          await webpush.sendNotification(subscription, payload);
+          results.push({ key, time: s.time, name: s.name });
+        }
+      } catch (e) {
+        console.warn('cron item error:', e.message);
+      }
+    }
+
+    return res.status(200).json({ ok: true, time: nowStr, notified: results });
+  } catch (err) {
+    console.error('cron error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+}
