@@ -5,8 +5,9 @@
  */
 'use strict';
 
-const CACHE_NAME = 'lifeflow-v4';
-const CACHE_FILES = ['./index.html','./style.css','./app.js','./sw.js','./manifest.json'];
+const CACHE_NAME = 'lifeflow-v5';
+// app.jsはキャッシュしない（常に最新を取得する）
+const CACHE_FILES = ['./index.html','./style.css','./manifest.json'];
 
 /* ── INSTALL ── */
 self.addEventListener('install', event => {
@@ -26,8 +27,9 @@ self.addEventListener('activate', event => {
 
 /* ── FETCH ── */
 self.addEventListener('fetch', event => {
-  // APIへのリクエストはキャッシュしない
-  if (event.request.url.includes('/api/')) return;
+  const url = event.request.url;
+  // API・app.js・sw.jsはキャッシュしない（常に最新）
+  if (url.includes('/api/') || url.includes('app.js') || url.includes('sw.js')) return;
   event.respondWith(
     caches.match(event.request).then(cached => cached || fetch(event.request))
   );
