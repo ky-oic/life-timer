@@ -100,9 +100,16 @@ function urlBase64ToUint8Array(b64) {
 async function getVapidPublicKey() {
   try {
     const res = await fetch('/api/vapid-public-key');
-    const { publicKey } = await res.json();
-    return publicKey;
-  } catch { return null; }
+    if (!res.ok) {
+      console.warn('vapid-public-key error:', res.status, await res.text());
+      return null;
+    }
+    const data = await res.json();
+    return data.publicKey || null;
+  } catch (err) {
+    console.warn('getVapidPublicKey failed:', err);
+    return null;
+  }
 }
 
 /* 通知許可ボタンの表示制御 */
@@ -147,13 +154,13 @@ async function requestNotifPermission() {
       userVisibleOnly:      true,
       applicationServerKey: urlBase64ToUint8Array(vapidKey),
     });
-    // 3. 購読情報を確認（ステートレスなのでOKを返すだけ）
+    // 3. 購読情報とスケジュールをサーバーのKVに保存
     await fetch('/api/subscribe', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ subscription: pushSub.toJSON() }),
+      body:    JSON.stringify({ subscription: pushSub.toJSON(), schedules }),
     });
-    // 4. SWにスケジュールを渡してタイマーをセット
+    // 4. SWにも伝達（アプリ前面時のフォールバック）
     syncSchedules();
   } catch (err) {
     console.warn('Push subscribe failed:', err);
@@ -161,14 +168,27 @@ async function requestNotifPermission() {
   updateNotifButton();
 }
 
-/* スケジュールをSWに渡してタイマーをセット */
-function syncSchedules() {
-  if (!swReg || !swReg.active || !pushSub) return;
-  swReg.active.postMessage({
-    type:         'SYNC_SCHEDULES',
-    schedules:    schedules,
-    subscription: pushSub.toJSON ? pushSub.toJSON() : pushSub,
-  });
+/* スケジュールをSWに渡し、KVにも保存 */
+async function syncSchedules() {
+  if (!pushSub) return;
+  // SWに伝達（アプリ前面時のフォールバック）
+  if (swReg && swReg.active) {
+    swReg.active.postMessage({
+      type:         'SYNC_SCHEDULES',
+      schedules:    schedules,
+      subscription: pushSub.toJSON ? pushSub.toJSON() : pushSub,
+    });
+  }
+  // サーバーのKVも更新（Vercel Cronがここを参照して通知する）
+  try {
+    await fetch('/api/subscribe', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ subscription: pushSub.toJSON(), schedules }),
+    });
+  } catch (err) {
+    console.warn('syncSchedules KV update failed:', err);
+  }
 }
 
 /* ── TOAST（アプリ前面時） ── */
