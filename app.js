@@ -81,11 +81,15 @@ async function initServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   try {
     swReg = await navigator.serviceWorker.register('./sw.js');
+    // SWが確実にactiveになるまで待つ
     await navigator.serviceWorker.ready;
     // 既存のPush購読を取得
     pushSub = await swReg.pushManager.getSubscription();
+    console.log('[LIFEFLOW] SW ready, pushSub:', pushSub ? 'exists' : 'none');
+    console.log('[LIFEFLOW] Notification.permission:', Notification.permission);
+    console.log('[LIFEFLOW] PushManager supported:', 'PushManager' in window);
   } catch (err) {
-    console.warn('SW registration failed:', err);
+    console.warn('[LIFEFLOW] SW registration failed:', err);
   }
 }
 
@@ -138,32 +142,54 @@ function updateNotifButton() {
 
 /* 通知許可ボタンのクリック → Push購読 */
 async function requestNotifPermission() {
-  if (!('Notification' in window)) return;
-  if (Notification.permission === 'denied') return;
+  if (!('Notification' in window)) { alert('このブラウザは通知に非対応です'); return; }
+  if (Notification.permission === 'denied') { alert('通知がブロックされています。設定→アプリ名→通知から許可してください'); return; }
 
-  // 1. iOSの通知許可ダイアログ（ユーザー操作が必要）
+  // 1. iOSの通知許可ダイアログ
   const result = await Notification.requestPermission();
+  console.log('[LIFEFLOW] permission result:', result);
   if (result !== 'granted') { updateNotifButton(); return; }
 
-  // 2. VAPID公開鍵を取得してPush購読
-  const vapidKey = await getVapidPublicKey();
-  if (!vapidKey || !swReg) { updateNotifButton(); return; }
+  // 2. SW準備確認
+  if (!swReg) { console.warn('[LIFEFLOW] swReg is null'); updateNotifButton(); return; }
+  await navigator.serviceWorker.ready;
 
+  // 3. VAPID公開鍵を取得
+  const vapidKey = await getVapidPublicKey();
+  console.log('[LIFEFLOW] vapidKey:', vapidKey ? vapidKey.slice(0, 20) + '...' : 'NULL');
+  if (!vapidKey) { updateNotifButton(); return; }
+
+  // 4. Push購読
   try {
+    // 既存の購読があれば一度解除してから再購読
+    const existing = await swReg.pushManager.getSubscription();
+    if (existing) {
+      console.log('[LIFEFLOW] unsubscribing existing subscription');
+      await existing.unsubscribe();
+    }
+
+    console.log('[LIFEFLOW] subscribing to push...');
     pushSub = await swReg.pushManager.subscribe({
       userVisibleOnly:      true,
       applicationServerKey: urlBase64ToUint8Array(vapidKey),
     });
-    // 3. 購読情報とスケジュールをサーバーのKVに保存
-    await fetch('/api/subscribe', {
+    console.log('[LIFEFLOW] pushSub obtained:', pushSub.endpoint.slice(0, 60) + '...');
+
+    // 5. サーバーのKVに保存
+    const subRes = await fetch('/api/subscribe', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ subscription: pushSub.toJSON(), schedules }),
     });
-    // 4. SWにも伝達（アプリ前面時のフォールバック）
+    const subData = await subRes.json();
+    console.log('[LIFEFLOW] subscribe API result:', subData);
+
+    // 6. SWにも伝達
     syncSchedules();
+
   } catch (err) {
-    console.warn('Push subscribe failed:', err);
+    console.error('[LIFEFLOW] Push subscribe failed:', err.name, err.message);
+    alert('通知の登録に失敗しました: ' + err.message);
   }
   updateNotifButton();
 }
