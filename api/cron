@@ -1,7 +1,7 @@
 /**
  * api/cron.js
- * Vercel Cronが毎分呼び出す → KVからスケジュールを読んで時刻一致なら通知送信
- * vercel.json で "crons" を設定する
+ * Vercel Cronが毎分呼び出す
+ * Upstash Redisから購読情報を読み、時刻一致のスケジュールに通知送信
  */
 import webpush from 'web-push';
 
@@ -11,45 +11,56 @@ webpush.setVapidDetails(
   process.env.VAPID_PRIVATE_KEY
 );
 
+async function redisGet(url, token, key) {
+  const r = await fetch(`${url}/get/${key}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await r.json();
+  return data.result ? JSON.parse(data.result) : null;
+}
+
+async function redisKeys(url, token, pattern) {
+  const r = await fetch(`${url}/keys/${pattern}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await r.json();
+  return data.result || [];
+}
+
 export default async function handler(req, res) {
-  // Vercel Cron からのリクエストのみ許可
+  // Vercel Cronからの認証確認
   if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  if (!process.env.KV_REST_API_URL) {
-    return res.status(200).json({ ok: true, skipped: 'KV not configured' });
+  const url   = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) {
+    return res.status(200).json({ ok: true, skipped: 'Redis not configured' });
   }
 
   try {
-    // 日本時間で現在の HH:MM を取得
+    // 日本時間(UTC+9)で現在のHH:MMを取得
     const now = new Date();
-    const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000); // UTC+9
+    const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
     const hh  = String(jst.getUTCHours()).padStart(2, '0');
     const mm  = String(jst.getUTCMinutes()).padStart(2, '0');
     const nowStr = `${hh}:${mm}`;
 
-    // KVから全購読キーを取得
-    const listRes = await fetch(`${process.env.KV_REST_API_URL}/keys/sub_*`, {
-      headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` },
-    });
-    const listData = await listRes.json();
-    const keys = listData.result || [];
+    console.log('Cron running at JST:', nowStr);
 
-    const results = [];
+    // 全購読キーを取得
+    const keys = await redisKeys(url, token, 'sub_*');
+    console.log('Found keys:', keys.length);
+
+    const notified = [];
+
     for (const key of keys) {
       try {
-        const getRes = await fetch(`${process.env.KV_REST_API_URL}/get/${key}`, {
-          headers: { Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}` },
-        });
-        const getData = await getRes.json();
-        if (!getData.result) continue;
+        const data = await redisGet(url, token, key);
+        if (!data?.subscription || !Array.isArray(data.schedules)) continue;
 
-        const { subscription, schedules } = JSON.parse(getData.result);
-        if (!subscription || !Array.isArray(schedules)) continue;
-
-        // 現在時刻と一致するスケジュールを探す
-        const matched = schedules.filter(s => s.time === nowStr);
+        const matched = data.schedules.filter(s => s.time === nowStr);
         for (const s of matched) {
           const catEmoji = { general:'⏰', work:'💼', meal:'🍽️', exercise:'🏃', rest:'😴' }[s.cat] || '⏰';
           const catLabel = { general:'一般', work:'仕事', meal:'食事', exercise:'運動', rest:'休憩' }[s.cat] || '';
@@ -57,15 +68,22 @@ export default async function handler(req, res) {
             title: `${catEmoji} ${s.time} — ${s.name}`,
             body:  `${catLabel}の時間です！`,
           });
-          await webpush.sendNotification(subscription, payload);
-          results.push({ key, time: s.time, name: s.name });
+
+          await webpush.sendNotification(data.subscription, payload);
+          notified.push({ key, time: s.time, name: s.name });
+          console.log('Sent notification:', s.time, s.name);
         }
       } catch (e) {
-        console.warn('cron item error:', e.message);
+        // 購読期限切れ(410)はそのまま続行
+        if (e.statusCode === 410) {
+          console.log('Subscription expired, skipping:', key);
+        } else {
+          console.warn('cron item error:', e.message);
+        }
       }
     }
 
-    return res.status(200).json({ ok: true, time: nowStr, notified: results });
+    return res.status(200).json({ ok: true, time: nowStr, notified });
   } catch (err) {
     console.error('cron error:', err);
     return res.status(500).json({ error: err.message });
